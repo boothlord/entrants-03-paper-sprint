@@ -1,98 +1,54 @@
-// Entry for make.fun's "bounty-entrants-03" (Bring the most entrants to
-// the bounties you make on make.fun).
+// bounty-entrants-03 entry program.
 //
-// The entry names the make.fun bounty this account sponsors —
-// "Pump.fun Paper Sprint: Any Bot Can Win" — in BOUNTY.json. The program
-// reads that file, validates every named bounty address, and writes a
-// small deterministic report to the output directory. The competition's
-// scorer reads the named bounties' counted entrants from make.fun's own
-// records; this program's job is to present them cleanly and run to a
-// successful exit inside the grader's sandbox (no network, read-only
-// repo, writable output dir).
-
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+// The whole contract for this bounty is one move: copy BOUNTY.json from
+// the repository into the output directory, byte for byte. The house
+// writes its own counts of the named bounties to
+// /output/bounty.counts.json after the runs and scores the pair of
+// files; nothing the program invents about the bounties counts for
+// anything, so this program copies and otherwise stays out of the way.
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-interface BountyFile {
-  bounties: string[];
-}
-
 function botDir(): string {
-  const fromEnv = process.env.MAKEFUN_BOT_DIR;
-  if (fromEnv && fromEnv.length > 0) return fromEnv;
-  return dirname(fileURLToPath(import.meta.url));
+  // The harness sets MAKEFUN_BOT_DIR to the repository it runs; when it
+  // is unset (a local run) the repository is this file's own directory.
+  return process.env.MAKEFUN_BOT_DIR ?? dirname(fileURLToPath(import.meta.url));
 }
 
 function outputDir(): string {
-  const fromEnv = process.env.MAKEFUN_OUTPUT_DIR;
-  if (fromEnv && fromEnv.length > 0) return fromEnv;
-  return join(botDir(), "output");
+  // The harness sets MAKEFUN_OUTPUT_DIR to the run's /output; locally
+  // the output lands in an output/ folder inside the repository.
+  return process.env.MAKEFUN_OUTPUT_DIR ?? join(botDir(), "output");
 }
 
-function isBountyAddress(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  // A make.fun bounty address: the full page URL, a /c/ address, a bare
-  // slug, or a competition id. We only ever write full page URLs, but the
-  // validator accepts every form the check reads. Surrounding whitespace
-  // is ignored so a hand-edited BOUNTY.json still validates.
-  const v = value.trim();
-  return (
-    v.startsWith("https://make.fun/bounty/") ||
-    v.startsWith("https://make.fun/c/") ||
-    /^[a-z0-9][a-z0-9-]*$/.test(v) ||
-    /^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(v)
-  );
+const bytes = readFileSync(join(botDir(), "BOUNTY.json"));
+
+// Refuse a file that is not the JSON object the bounty asks for: an
+// object naming "bounties" (a list) or "url" (one bounty), never both.
+const parsed: unknown = JSON.parse(bytes.toString("utf8"));
+if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  throw new Error("BOUNTY.json must be a JSON object");
+}
+const named = parsed as Record<string, unknown>;
+const hasList = Array.isArray(named.bounties);
+const hasUrl = typeof named.url === "string";
+if (hasList === hasUrl) {
+  throw new Error("BOUNTY.json must name bounties or url, not both and not neither");
+}
+if (hasList && (named.bounties as unknown[]).length === 0) {
+  throw new Error("BOUNTY.json names no bounties");
 }
 
-type AddressKind = "page" | "c" | "slug" | "id";
+mkdirSync(outputDir(), { recursive: true });
+const target = join(outputDir(), "BOUNTY.json");
+writeFileSync(target, bytes);
 
-function addressKind(address: string): AddressKind {
-  const v = address.trim();
-  if (v.startsWith("https://make.fun/bounty/")) return "page";
-  if (v.startsWith("https://make.fun/c/")) return "c";
-  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(v)) return "id";
-  return "slug";
+// Read the copy back and hold it against the source: the harness runs
+// this program twice and the two runs must write the same bytes, so a
+// copy that does not match the repository's file byte for byte is a
+// failed run, never a quiet one.
+const written = readFileSync(target);
+if (!written.equals(bytes)) {
+  throw new Error("the BOUNTY.json in the output does not match the repository's");
 }
-
-function main(): void {
-  const root = botDir();
-  const raw = readFileSync(join(root, "BOUNTY.json"), "utf8");
-  const parsed = JSON.parse(raw) as Partial<BountyFile>;
-
-  if (!parsed || !Array.isArray(parsed.bounties)) {
-    throw new Error("BOUNTY.json must hold a \"bounties\" list");
-  }
-  const bounties = parsed.bounties.filter(isBountyAddress);
-  if (bounties.length !== parsed.bounties.length) {
-    throw new Error("BOUNTY.json names something that is not a bounty address");
-  }
-  if (bounties.length === 0) {
-    throw new Error("BOUNTY.json names no bounties");
-  }
-
-  // Read each bounty once, in file order, with whitespace normalized so
-  // the same bounty written two ways still dedupes to one.
-  const seen = new Set<string>();
-  const named: string[] = [];
-  for (const address of bounties) {
-    const v = address.trim();
-    if (seen.has(v)) continue;
-    seen.add(v);
-    named.push(v);
-  }
-
-  const report = {
-    competition: "bounty-entrants-03",
-    bounties: named,
-    kinds: named.map(addressKind),
-    bounty_count: named.length,
-  };
-
-  const out = outputDir();
-  mkdirSync(out, { recursive: true });
-  writeFileSync(join(out, "result.json"), JSON.stringify(report, null, 2) + "\n");
-  console.log(`bounty-entrants-03 entry: ${named.length} sponsored bounty named`);
-}
-
-main();
