@@ -34,13 +34,25 @@ function isBountyAddress(value: unknown): value is string {
   if (typeof value !== "string") return false;
   // A make.fun bounty address: the full page URL, a /c/ address, a bare
   // slug, or a competition id. We only ever write full page URLs, but the
-  // validator accepts every form the check reads.
+  // validator accepts every form the check reads. Surrounding whitespace
+  // is ignored so a hand-edited BOUNTY.json still validates.
+  const v = value.trim();
   return (
-    value.startsWith("https://make.fun/bounty/") ||
-    value.startsWith("https://make.fun/c/") ||
-    /^[a-z0-9][a-z0-9-]*$/.test(value) ||
-    /^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(value)
+    v.startsWith("https://make.fun/bounty/") ||
+    v.startsWith("https://make.fun/c/") ||
+    /^[a-z0-9][a-z0-9-]*$/.test(v) ||
+    /^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(v)
   );
+}
+
+type AddressKind = "page" | "c" | "slug" | "id";
+
+function addressKind(address: string): AddressKind {
+  const v = address.trim();
+  if (v.startsWith("https://make.fun/bounty/")) return "page";
+  if (v.startsWith("https://make.fun/c/")) return "c";
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(v)) return "id";
+  return "slug";
 }
 
 function main(): void {
@@ -59,18 +71,21 @@ function main(): void {
     throw new Error("BOUNTY.json names no bounties");
   }
 
-  // Read each bounty once, in file order.
+  // Read each bounty once, in file order, with whitespace normalized so
+  // the same bounty written two ways still dedupes to one.
   const seen = new Set<string>();
   const named: string[] = [];
   for (const address of bounties) {
-    if (seen.has(address)) continue;
-    seen.add(address);
-    named.push(address);
+    const v = address.trim();
+    if (seen.has(v)) continue;
+    seen.add(v);
+    named.push(v);
   }
 
   const report = {
     competition: "bounty-entrants-03",
     bounties: named,
+    kinds: named.map(addressKind),
     bounty_count: named.length,
   };
 
